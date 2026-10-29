@@ -24,8 +24,20 @@ func (h *httpClient) post(ctx context.Context, path string, body, out any) error
 	return h.do(ctx, http.MethodPost, path, nil, body, out)
 }
 
+func (h *httpClient) put(ctx context.Context, path string, body, out any) error {
+	return h.do(ctx, http.MethodPut, path, nil, body, out)
+}
+
+func (h *httpClient) patch(ctx context.Context, path string, body, out any) error {
+	return h.do(ctx, http.MethodPatch, path, nil, body, out)
+}
+
 func (h *httpClient) delete(ctx context.Context, path string, out any) error {
 	return h.do(ctx, http.MethodDelete, path, nil, nil, out)
+}
+
+func (h *httpClient) deleteWithBody(ctx context.Context, path string, body, out any) error {
+	return h.do(ctx, http.MethodDelete, path, nil, body, out)
 }
 
 func (h *httpClient) do(ctx context.Context, method, path string, query map[string]string, body, out any) error {
@@ -34,9 +46,14 @@ func (h *httpClient) do(ctx context.Context, method, path string, query map[stri
 	if len(query) > 0 {
 		params := url.Values{}
 		for k, v := range query {
-			params.Set(k, v)
+			if v != "" {
+				params.Set(k, v)
+			}
 		}
-		u += "?" + params.Encode()
+		encoded := params.Encode()
+		if encoded != "" {
+			u += "?" + encoded
+		}
 	}
 
 	var bodyReader io.Reader
@@ -53,9 +70,11 @@ func (h *httpClient) do(ctx context.Context, method, path string, query map[stri
 		return err
 	}
 
+	req.Header.Set("Authorization", "Bearer "+h.apiKey)
 	req.Header.Set("x-api-key", h.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "spidra-go/0.2.0")
 
 	resp, err := h.http.Do(req)
 	if err != nil {
@@ -72,7 +91,7 @@ func (h *httpClient) do(ctx context.Context, method, path string, query map[stri
 		return mapError(resp.StatusCode, data)
 	}
 
-	if out != nil {
+	if out != nil && len(data) > 0 {
 		return json.Unmarshal(data, out)
 	}
 	return nil

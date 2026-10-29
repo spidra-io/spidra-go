@@ -20,6 +20,13 @@ func (r *ScrapeResource) Submit(ctx context.Context, params ScrapeParams) (*Scra
 	return &job, nil
 }
 
+// SubmitURL is a convenience helper to queue a single URL with default options.
+func (r *ScrapeResource) SubmitURL(ctx context.Context, targetURL string) (*ScrapeJob, error) {
+	return r.Submit(ctx, ScrapeParams{
+		URLs: []ScrapeURL{{URL: targetURL}},
+	})
+}
+
 // Get returns the current status and result of a scrape job.
 func (r *ScrapeResource) Get(ctx context.Context, jobID string) (*ScrapeJob, error) {
 	var job ScrapeJob
@@ -47,24 +54,59 @@ func (r *ScrapeResource) Run(ctx context.Context, params ScrapeParams, opts ...P
 		return nil, fmt.Errorf("spidra: no jobId in response")
 	}
 
+	switch queued.Status {
+	case "completed":
+		return queued, nil
+	case "failed", "error", "cancelled":
+		errMsg := queued.Error
+		if errMsg == "" {
+			errMsg = "scrape job " + queued.Status
+		}
+		return queued, &JobFailedError{Message: errMsg, JobID: jobID, Status: queued.Status}
+	}
+
 	deadline := time.Now().Add(o.Timeout)
 
 	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		job, err := r.Get(ctx, jobID)
 		if err != nil {
 			return nil, err
 		}
 
 		switch job.Status {
-		case "completed", "failed", "cancelled":
+		case "completed":
 			job.JobID = jobID
 			return job, nil
+		case "failed", "error", "cancelled":
+			job.JobID = jobID
+			errMsg := job.Error
+			if errMsg == "" {
+				errMsg = "scrape job " + job.Status
+			}
+			return job, &JobFailedError{Message: errMsg, JobID: jobID, Status: job.Status}
 		}
 
 		if time.Now().Add(o.PollInterval).After(deadline) {
-			return nil, fmt.Errorf("spidra: scrape job timed out after %s, jobId: %s", o.Timeout, jobID)
+			return nil, &TimeoutError{
+				Message:        fmt.Sprintf("spidra: scrape job timed out after %s, jobId: %s", o.Timeout, jobID),
+				JobID:          jobID,
+				TimeoutSeconds: int64(o.Timeout.Seconds()),
+			}
 		}
 
 		time.Sleep(o.PollInterval)
 	}
+}
+
+// RunURL scrapes a single URL with default options and waits for completion.
+func (r *ScrapeResource) RunURL(ctx context.Context, targetURL string, opts ...PollOptions) (*ScrapeJob, error) {
+	return r.Run(ctx, ScrapeParams{
+		URLs: []ScrapeURL{{URL: targetURL}},
+	}, opts...)
 }
